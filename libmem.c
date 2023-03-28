@@ -1,8 +1,11 @@
 #include "./libmem.h"
-
 #include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+
+#define FOR_EACH_BLOCK(block) for(block_t* block = block_first(); block != NULL; block = block_next(block))
 
 // IMPORTANT(Alexis Brodeur): Dans ce fichier, et tout code utilisé par ce fichier,
 // vous ne pouvez pas utiliser `malloc`, `free`, etc.
@@ -46,15 +49,15 @@ static inline block_t* block_first()
  */
 static block_t* block_next(block_t* block)
 {
-    // TODO(Alexis Brodeur): À implémenter.
+    char* next_address = (char*) (block + 1) + block->size;
 
-    ((void)block);
-
-    return NULL;
+    return next_address >= (char*) state.ptr + state.len ? NULL : (block_t*) next_address;
 }
 
 /**
- * @brief Acquiert un nombre d'octet du bloc dans le cadre d'une allocation de
+ * @brief
+ *
+ *
  * mémoire.
  *
  * @param block Le noeud libre à utiliser
@@ -71,6 +74,26 @@ static void block_acquire(block_t* block, size_t size)
     // IMPORTANT(Alexis Brodeur):
     // Que faire si `block->size > size` ?  Utiliser les 1000 octets d'un bloc
     // libre pour une allocation de 10 octets ne fait pas de sens.
+    size_t size_remaining = block->size - size;
+    if (size_remaining > sizeof(block_t)) {
+        // Créer un nouveau bloc
+        block->size = size;
+        block_t* new_block = block_next(block);
+        new_block->size = size_remaining - sizeof(block_t);
+        new_block->previous = block;
+        new_block->free = true;
+
+        // changer l'adresse, le bloc précédent et la taille de block
+        //&block += size;
+
+        // Changer le bloc précédent du bloc suivant block
+        block_t* next_block = block_next(new_block);
+        if (next_block != NULL) {
+            next_block->previous = new_block;
+        }
+    }
+
+    block->free = false;
 }
 
 /**
@@ -104,11 +127,25 @@ void mem_init(size_t size, mem_strategy_t strategy)
 
     // IMPORTANT(Alexis Brodeur): Comment obtenir de la mémoire sans utiliser
     // `malloc` ?
+    state.strategy = strategy;
+    state.len = size;
+
+    state.ptr = (void*) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+    //gestion d'erreur
+    if(state.ptr == MAP_FAILED){
+        exit(EXIT_FAILURE);
+    }
+
+    block_t* block = block_first();
+    block->free = true;
+    block->previous = NULL;
+    block->size = size - sizeof(block_t);
 }
 
 void mem_deinit(void)
 {
     // TODO(Alexis Brodeur): Libérez la mémoire utilisée par votre gestionnaire.
+    // utiliser mummap
 }
 
 void* mem_alloc(size_t size)
@@ -125,7 +162,38 @@ void* mem_alloc(size_t size)
     //
     // Venez me poser des questions si cela n'est pas clair !
 
-    return NULL;
+    block_t* requested_block = NULL;
+
+    switch(state.strategy) {
+        case MEM_FIRST_FIT:
+            FOR_EACH_BLOCK(block) {
+                //find the best thingy
+            }
+            break;
+        case MEM_BEST_FIT:
+            FOR_EACH_BLOCK(block) {
+                //find the best thingy
+            }
+            break;
+        case MEM_WORST_FIT:
+            FOR_EACH_BLOCK(block) {
+                //find the best thingy
+            }
+            break;
+        case MEM_NEXT_FIT:
+            FOR_EACH_BLOCK(block) {
+                //find the best thingy
+            }
+            break;
+    }
+
+    if(requested_block == NULL) {
+        return NULL;
+    }
+
+    block_acquire(requested_block, size);
+
+    return requested_block + 1;
 }
 
 void mem_free(void* ptr)
@@ -135,6 +203,7 @@ void mem_free(void* ptr)
     // TODO(Alexis Brodeur): Libère le bloc de mémoire pointé par `ptr`.
     //
     // Assumez que `ptr` est TOUJOURS un pointeur retourné par `mem_alloc`.
+    block_release((block_t*) ptr -1);
 }
 
 size_t mem_get_free_block_count()
