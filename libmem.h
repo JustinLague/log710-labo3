@@ -34,6 +34,8 @@ size_t mem_count_small_free_blocks(size_t max_bytes);
 
 bool mem_is_allocated(void* ptr);
 
+void* mem_get_block_start (void* ptr);
+
 void mem_print_state(void);
 
 #endif

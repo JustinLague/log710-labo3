@@ -14,7 +14,7 @@ static struct {
     void* ptr;
     size_t len;
     mem_strategy_t strategy;
-    // TODO(Alexis Brodeur): Ajouter au moins 1 champ pour le *next-fit*.
+    void* last_allocated_block;
 } state;
 
 // IMPORTANT(Alexis Brodeur): Avant de commencer à implémenter le code de ce
@@ -107,11 +107,31 @@ static void block_release(block_t* block)
     assert(block != NULL);
     assert(!block->free);
 
-    // TODO(Alexis Brodeur): À implémenter.
+    block_t* next_block = block_next(block);
+    block_t* previous_block = block->previous;
 
-    // IMPORTANT(Alexis Brodeur):
-    // Que faire si le bloc suivant est libre ?
-    // Que faire si le bloc précédent est libre ?
+    block->free = true;
+
+    // si le bloc précédent est libre
+    if (previous_block != NULL && previous_block->free == true){
+        //joindre blocs ensemble
+        previous_block->size += block->size + sizeof(block_t);
+        block = previous_block;
+    }
+
+    // si le bloc suivant est libre
+    if (next_block != NULL) {
+        if (next_block->free == true) {
+            //joindre blocs ensemble
+            block->size += next_block->size + sizeof(block_t);
+            if (block_next(block) != NULL) {
+                block_next(block)->previous = block;
+            }
+        }
+        else {
+            next_block->previous = block;
+        }
+    }
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -129,6 +149,7 @@ void mem_init(size_t size, mem_strategy_t strategy)
     // `malloc` ?
     state.strategy = strategy;
     state.len = size;
+    state.last_allocated_block = NULL;
 
     state.ptr = (void*) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
     //gestion d'erreur
@@ -146,6 +167,9 @@ void mem_deinit(void)
 {
     // TODO(Alexis Brodeur): Libérez la mémoire utilisée par votre gestionnaire.
     // utiliser mummap
+    if (munmap(state.ptr, state.len) == -1) {
+        exit(EXIT_FAILURE);
+    }
 }
 
 void* mem_alloc(size_t size)
@@ -163,33 +187,77 @@ void* mem_alloc(size_t size)
     // Venez me poser des questions si cela n'est pas clair !
 
     block_t* requested_block = NULL;
+    size_t requested_block_size;
 
     switch(state.strategy) {
         case MEM_FIRST_FIT:
+
             FOR_EACH_BLOCK(block) {
-                //find the best thingy
+                if (block->free == true && block->size >= size) {
+                    requested_block = block;
+                    break;
+                }
             }
             break;
+
         case MEM_BEST_FIT:
+
+            requested_block_size = state.len;
+
             FOR_EACH_BLOCK(block) {
-                //find the best thingy
+                if ((block->free == true) && (block->size >= size) && (block->size < requested_block_size)) {
+                    requested_block = block;
+                    requested_block_size = block->size;
+                }
             }
             break;
+
         case MEM_WORST_FIT:
+
+            requested_block_size = 0;
+
             FOR_EACH_BLOCK(block) {
-                //find the best thingy
+                if ((block->free == true) && (block->size > requested_block_size) && (block->size >= size)) {
+                    requested_block = block;
+                    requested_block_size = block->size;
+                }
             }
             break;
+
         case MEM_NEXT_FIT:
-            FOR_EACH_BLOCK(block) {
-                //find the best thingy
+        if (state.last_allocated_block == NULL) {
+            requested_block = (block_t*) block_first();
+            break;
+        }
+
+        block_t* last_allocated_block = state.last_allocated_block;
+        block_t* starting_block = block_next(mem_get_block_start(last_allocated_block));
+        block_t* current_block = starting_block;
+        if (current_block == NULL && last_allocated_block == block_first()) {
+            if (last_allocated_block->free == true && last_allocated_block->size > size){
+                requested_block = last_allocated_block;
             }
             break;
+        }
+        do {
+            if (current_block == NULL) {
+                current_block = state.ptr;
+            }
+            if (current_block->free == true && current_block->size >= size) {
+                requested_block = current_block;
+                break;
+            }
+            current_block = block_next(current_block);
+        } while (current_block != starting_block);
+
+        break;
     }
 
     if(requested_block == NULL) {
         return NULL;
     }
+
+    state.last_allocated_block = requested_block;
 
     block_acquire(requested_block, size);
 
@@ -208,16 +276,36 @@ void mem_free(void* ptr)
 
 size_t mem_get_free_block_count()
 {
-    // TODO(Alexis Brodeur): Indiquez combien de blocs de mémoire sont libre.
+    block_t* block = state.ptr;
+    int block_count = block->free == true ? 1 : 0;
 
-    return 0;
+    while(block_next(block) != NULL) {
+
+        block = block_next(block);
+
+        if (block->free == true) {
+            block_count += 1;
+        }
+    }
+
+    return block_count;
 }
 
 size_t mem_get_allocated_block_count()
 {
-    // TODO(Alexis Brodeur): Indiquez combien de blocs de mémoire sont alloués.
+    block_t* block = state.ptr;
+    int block_count = block->free == false ? 1 : 0;
 
-    return 0;
+    while(block_next(block) != NULL) {
+
+        block = block_next(block);
+
+        if (block->free == false) {
+            block_count += 1;
+        }
+    }
+
+    return block_count;
 }
 
 size_t mem_get_free_bytes()
@@ -225,7 +313,19 @@ size_t mem_get_free_bytes()
     // TODO(Alexis Brodeur): Indiquez combien d'octets sont disponibles pour
     // des allocations de mémoire.
 
-    return 0;
+    block_t* block = state.ptr;
+    size_t byte_count = block->free == true ? block->size : 0;
+
+    while(block_next(block) != NULL) {
+
+        block = block_next(block);
+
+        if (block->free == true) {
+            byte_count += block->size;
+        }
+    }
+
+    return byte_count;
 }
 
 size_t mem_get_biggest_free_block_size()
@@ -233,7 +333,19 @@ size_t mem_get_biggest_free_block_size()
     // TODO(Alexis Brodeur): Indiquez la taille en octets du plus gros plus de
     // mémoire libre.
 
-    return 0;
+    block_t* block = state.ptr;
+    size_t biggest_free_space_size = block->free == true ? block->size : 0;
+
+    while(block_next(block) != NULL) {
+
+        block = block_next(block);
+
+        if (block->free == true && block->size > biggest_free_space_size) {
+            biggest_free_space_size = block->size;
+        }
+    }
+
+    return biggest_free_space_size;
 }
 
 size_t mem_count_small_free_blocks(size_t max_bytes)
@@ -243,7 +355,21 @@ size_t mem_count_small_free_blocks(size_t max_bytes)
     // TODO(Alexis Brodeur): Indiquez combien de blocs de mémoire plus petit que
     // `max_bytes` sont disponible.
 
-    return 0;
+    assert(max_bytes > 0);
+
+    block_t* block = state.ptr;
+    int block_count = (block->free == true) && (block->size < max_bytes) ? 1 : 0;
+
+    while(block_next(block) != NULL) {
+
+        block = block_next(block);
+
+        if ((block->free == true) && (block->size < max_bytes)) {
+            block_count += 1;
+        }
+    }
+
+    return block_count;
 }
 
 bool mem_is_allocated(void* ptr)
@@ -255,7 +381,33 @@ bool mem_is_allocated(void* ptr)
     // NOTE(Alexis Brodeur): Ce pointeur peut pointer vers n'importe quelle
     // adresse mémoire.
 
+    block_t* block = state.ptr;
+
+    FOR_EACH_BLOCK(block) {
+        void* block_address = (void*) block;
+        void* next_address = (void*) ((char*) (block + 1) + block->size);
+        if (block_address <= ptr && next_address > ptr) {
+            return !block->previous->free;
+            break;
+        }
+    }
+
     return false;
+}
+
+void* mem_get_block_start (void* ptr)
+{
+    block_t* block = ptr;
+    block_t* previous_block = block->previous;
+
+    if (previous_block == NULL) {
+        previous_block = block_first();
+    }
+    else if (block_next(previous_block) != block) {
+        block = previous_block;
+    }
+
+    return block;
 }
 
 void mem_print_state(void)
@@ -275,4 +427,29 @@ void mem_print_state(void)
     // ```
     // A100 F24 A20 A58 F20 A27 F600
     // ```
+
+    block_t* block = state.ptr;
+
+    if (block->free == true) {
+        printf("F");
+    }
+    else {
+        printf("A");
+    }
+
+    printf("%lu ", block->size);
+
+    while(block_next(block) != NULL) {
+
+        block = block_next(block);
+
+        if (block->free == true) {
+        printf("F");
+        }
+        else {
+            printf("A");
+        }
+
+        printf("%lu ", block->size);
+    }
 }
