@@ -231,7 +231,7 @@ void* mem_alloc(size_t size)
         }
 
         block_t* last_allocated_block = state.last_allocated_block;
-        block_t* starting_block = block_next(mem_get_block_start(last_allocated_block));
+        block_t* starting_block = mem_get_block_start(last_allocated_block);
         block_t* current_block = starting_block;
         if (current_block == NULL && last_allocated_block == block_first()) {
             if (last_allocated_block->free == true && last_allocated_block->size > size){
@@ -394,7 +394,7 @@ bool mem_is_allocated(void* ptr)
 
     return false;
 }
-
+// TODO : si block est freed, allocation devrait continuer du block libre
 void* mem_get_block_start (void* ptr)
 {
     block_t* block = ptr;
